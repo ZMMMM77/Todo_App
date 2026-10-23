@@ -1,0 +1,22 @@
+# Swift / Xcode build output
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Local app bundles and distribution artifacts
+*.app/
+*.dmg
+*.zip
+
+# macOS metadata
+.DS_Store
+
+# Local screenshots, development notes, and task data
+preview.png
+dot-preview.png
+interaction-preview.png
+VALIDATION.md
+tasks.json
+*.tmp
