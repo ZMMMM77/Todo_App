@@ -32,7 +32,7 @@ final class TaskStore: ObservableObject {
             }
         } catch {
             writable = false
-            errorMessage = "无法读取本地任务。为保护原文件，已暂停修改。\n\(error.localizedDescription)\n\(file.path)"
+            errorMessage = AppSettings.shared.text("读取失败") + "\n\(error.localizedDescription)\n\(file.path)"
         }
     }
     func commit(_ next: [TaskItem]) {
@@ -43,7 +43,7 @@ final class TaskStore: ObservableObject {
             let data = try encoder.encode(next)
             try data.write(to: file, options: .atomic)
             tasks = next
-        } catch { errorMessage = "保存失败，修改未写入。请检查磁盘空间和文件权限。\n\(error.localizedDescription)" }
+        } catch { errorMessage = AppSettings.shared.text("保存失败") + "\n\(error.localizedDescription)" }
     }
     func add(_ title: String) {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -94,6 +94,12 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
     @Published var expanded = false
     @Published var visualExpanded = false
     private var transitioning = false
+    @Published var settingsOpen = false {
+        didSet {
+            if settingsOpen { pending?.cancel() }
+            else { pointerInside = true; checkPointer() }
+        }
+    }
     @Published var pinned = false
     @Published var editing = false {
         didSet {
@@ -137,7 +143,7 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = false
         panel.delegate = self
-        panel.contentView = NSHostingView(rootView: TodoView(store: store, controller: self))
+        panel.contentView = NSHostingView(rootView: TodoView(store: store, controller: self).environmentObject(AppSettings.shared))
         panel.orderFrontRegardless()
         // Window geometry is authoritative, including after SwiftUI changes its size.
         pointerTimer = Timer.scheduledTimer(withTimeInterval: 0.10, repeats: true) { [weak self] _ in
@@ -158,10 +164,10 @@ final class PanelController: NSObject, ObservableObject, NSWindowDelegate {
     }
     func hover(_ inside: Bool) {
         pending?.cancel()
-        guard !pinned && !suppressUntilExit else { return }
+        guard !pinned && !settingsOpen && !suppressUntilExit else { return }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, !self.pinned else { return }
+                guard let self, !self.pinned, !self.settingsOpen else { return }
                 self.setExpanded(inside)
             }
         }
@@ -261,6 +267,7 @@ struct DragHandle: NSViewRepresentable {
 }
 
 struct TaskRow: View {
+    @EnvironmentObject var settings: AppSettings
     let item: TaskItem
     @ObservedObject var store: TaskStore
     @ObservedObject var controller: PanelController
@@ -273,8 +280,8 @@ struct TaskRow: View {
                     .font(.system(size: 19, weight: .light))
                     .foregroundStyle(item.completed ? Color.accentColor : Color.secondary)
                     .frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel(item.completed ? "恢复任务" : "完成任务")
-            TextField("任务", text: $draft)
+            }.buttonStyle(.plain).accessibilityLabel(item.completed ? settings.text("恢复任务") : settings.text("完成任务"))
+            TextField(settings.text("任务"), text: $draft)
                 .textFieldStyle(.plain).font(.system(size: 13))
                 .strikethrough(item.completed && !focused)
                 .foregroundStyle(item.completed ? .secondary : .primary)
@@ -283,7 +290,7 @@ struct TaskRow: View {
             Image(systemName: "line.3.horizontal").font(.system(size: 9)).foregroundStyle(.tertiary)
                 .frame(width: 28, height: 32).contentShape(Rectangle())
                 .onDrag { NSItemProvider(object: item.id.uuidString as NSString) }
-                .help("拖动排序；右键可移动或删除")
+                .help(settings.text("拖动排序；右键可移动或删除"))
         }
         .padding(.vertical, 9).padding(.horizontal, 10)
         .background(.primary.opacity(focused ? 0.06 : 0.025), in: RoundedRectangle(cornerRadius: 11))
@@ -295,10 +302,10 @@ struct TaskRow: View {
             if !value { store.rename(item.id, draft); draft = store.tasks.first(where: { $0.id == item.id })?.title ?? draft }
         }
         .contextMenu {
-            Button("上移") { store.moveBy(item.id, offset: -1) }
-            Button("下移") { store.moveBy(item.id, offset: 1) }
+            Button(settings.text("上移")) { store.moveBy(item.id, offset: -1) }
+            Button(settings.text("下移")) { store.moveBy(item.id, offset: 1) }
             Divider()
-            Button("删除", role: .destructive) { store.delete(item.id) }
+            Button(settings.text("删除"), role: .destructive) { store.delete(item.id) }
         }
         .dropDestination(for: String.self) { strings, _ in
             guard let value = strings.first, let id = UUID(uuidString: value) else { return false }
@@ -308,6 +315,7 @@ struct TaskRow: View {
 }
 
 struct TodoView: View {
+    @EnvironmentObject var settings: AppSettings
     @ObservedObject var store: TaskStore
     @ObservedObject var controller: PanelController
     @ViewState private var newTitle = ""
@@ -338,8 +346,8 @@ struct TodoView: View {
             .frame(width: 22, height: 22)
             .opacity(controller.visualExpanded ? 0 : 1)
             .allowsHitTesting(!controller.expanded)
-            .accessibilityLabel("待办，\(store.remaining) 项未完成。悬停展开")
-            .help("悬停查看待办 · 拖动调整位置")
+            .accessibilityLabel(settings.language == .english ? "\(store.remaining) tasks remaining. Hover to expand." : "待办，\(store.remaining) 项未完成。悬停展开")
+            .help(settings.text("悬停查看待办 · 拖动调整位置"))
             .onTapGesture { controller.reveal() }
             }
         }
@@ -348,38 +356,45 @@ struct TodoView: View {
         .gesture(TapGesture().onEnded { controller.reveal() }, including: controller.expanded ? .subviews : .all)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .onChange(of: adding) { _, value in controller.editing = value }
-        .alert("本地数据提示", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
-            Button("知道了", role: .cancel) { store.errorMessage = nil }
-            Button("打开数据文件夹") { NSWorkspace.shared.open(store.directory) }
+        .alert(settings.text("本地数据提示"), isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
+            Button(settings.text("知道了"), role: .cancel) { store.errorMessage = nil }
+            Button(settings.text("打开数据文件夹")) { NSWorkspace.shared.open(store.directory) }
         } message: { Text(store.errorMessage ?? "") }
     }
     var expandedView: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("待办").font(.system(size: 21, weight: .semibold))
-                    Text(Date.now, format: .dateTime.month(.wide).day().weekday(.wide))
+                    Text(settings.text("待办")).font(.system(size: 21, weight: .semibold))
+                    Text(Date.now.formatted(Date.FormatStyle().month(.wide).day().weekday(.wide).locale(settings.locale)))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }.allowsHitTesting(false)
                 Spacer().allowsHitTesting(false)
+                Button { adding = false; controller.settingsOpen = true } label: {
+                    Image(systemName: "gearshape").frame(width: 36, height: 36).contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help(settings.text("设置")).accessibilityLabel(settings.text("设置"))
+                    .popover(isPresented: $controller.settingsOpen, arrowEdge: .trailing) {
+                        SettingsView(settings: settings) { controller.settingsOpen = false }
+                    }
                 Button { controller.togglePin() } label: {
                     Image(systemName: controller.pinned ? "pin.fill" : "pin").frame(width: 36, height: 36).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(controller.pinned ? Color.accentColor : .secondary)
-                    .help(controller.pinned ? "取消固定" : "固定面板")
-                    .accessibilityLabel(controller.pinned ? "取消固定" : "固定面板")
+                    .help(controller.pinned ? settings.text("取消固定") : settings.text("固定面板"))
+                    .accessibilityLabel(controller.pinned ? settings.text("取消固定") : settings.text("固定面板"))
                 Button { adding = false; controller.collapse() } label: {
                     Image(systemName: "minus").frame(width: 36, height: 36).contentShape(Rectangle())
-                }.buttonStyle(.plain).foregroundStyle(.secondary).help("收起").accessibilityLabel("收起")
+                }.buttonStyle(.plain).foregroundStyle(.secondary).help(settings.text("收起")).accessibilityLabel(settings.text("收起"))
             }
             .frame(maxWidth: .infinity, minHeight: 44)
             .padding(.horizontal, 20)
             .padding(.top, 16)
             .padding(.bottom, 4)
-            .overlay { DragHandle(excludedTrailing: 108) }
+            .overlay { DragHandle(excludedTrailing: 154) }
             .padding(.horizontal, -20)
             .padding(.top, -16)
             HStack {
-                Text("待完成").font(.system(size: 11, weight: .medium))
+                Text(settings.text("待完成")).font(.system(size: 11, weight: .medium))
                 Spacer()
                 Text("\(store.remaining)").font(.system(size: 11, weight: .medium, design: .rounded))
             }.foregroundStyle(.secondary)
@@ -388,8 +403,8 @@ struct TodoView: View {
                     if store.remaining == 0 {
                         VStack(spacing: 12) {
                             Image(systemName: "sun.max").font(.system(size: 28, weight: .ultraLight))
-                            Text("给今天留一点空间").font(.system(size: 13, weight: .medium))
-                            Text("在下面记下一件想做的事").font(.system(size: 11)).foregroundStyle(.secondary)
+                            Text(settings.text("给今天留一点空间")).font(.system(size: 13, weight: .medium))
+                            Text(settings.text("在下面记下一件想做的事")).font(.system(size: 11)).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity).padding(.vertical, 44).foregroundStyle(.secondary)
                     }
                     ForEach(store.tasks.filter { !$0.completed }) { item in
@@ -403,14 +418,14 @@ struct TodoView: View {
                                 HStack {
                                     Image(systemName: "chevron.right")
                                         .rotationEffect(.degrees(showCompleted ? 90 : 0))
-                                    Text("已完成 · \(store.tasks.count - store.remaining)")
+                                    Text(settings.text("已完成") + " · \(store.tasks.count - store.remaining)")
                                     Spacer()
                                 }
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, minHeight: 36)
                                 .contentShape(Rectangle())
                             }.buttonStyle(.plain)
-                            .accessibilityLabel(showCompleted ? "收起已完成" : "展开已完成")
+                            .accessibilityLabel(showCompleted ? settings.text("收起已完成") : settings.text("展开已完成"))
                             if showCompleted {
                                 ForEach(store.tasks.filter(\.completed)) { item in
                                     TaskRow(item: item, store: store, controller: controller)
@@ -422,9 +437,9 @@ struct TodoView: View {
             }.scrollIndicators(.hidden)
             if store.deletedTask != nil {
                 HStack {
-                    Text("已删除任务").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(settings.text("已删除任务")).font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
-                    Button { store.undoDelete() } label: { Text("撤销").frame(minWidth: 44, minHeight: 32).contentShape(Rectangle()) }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Color.accentColor)
+                    Button { store.undoDelete() } label: { Text(settings.text("撤销")).frame(minWidth: 44, minHeight: 32).contentShape(Rectangle()) }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Color.accentColor)
                 }
             }
             HStack(spacing: 8) {
@@ -434,13 +449,13 @@ struct TodoView: View {
                 } label: {
                     Image(systemName: "plus").foregroundStyle(.secondary)
                         .frame(width: 28, height: 32).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("输入新待办")
-                TextField("添加一件待办…", text: $newTitle)
+                }.buttonStyle(.plain).accessibilityLabel(settings.text("输入新待办"))
+                TextField(settings.text("添加一件待办…"), text: $newTitle)
                     .textFieldStyle(.plain).font(.system(size: 13)).focused($adding)
                     .onSubmit(addTask)
                 if !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button(action: addTask) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 20)).frame(width: 32, height: 32).contentShape(Rectangle()) }
-                        .buttonStyle(.plain).accessibilityLabel("添加任务")
+                        .buttonStyle(.plain).accessibilityLabel(settings.text("添加任务"))
                 }
             }.frame(minHeight: 32).padding(.horizontal, 12).padding(.vertical, 6)
             .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 13))
@@ -451,9 +466,9 @@ struct TodoView: View {
             })
             HStack(spacing: 4) {
                 Image(systemName: "internaldrive").font(.system(size: 9))
-                Text("仅存储在此 Mac").font(.system(size: 10))
+                Text(settings.text("仅存储在此 Mac")).font(.system(size: 10))
                 Spacer()
-                Text("拖动顶部移动").font(.system(size: 10))
+                Text(settings.text("拖动顶部移动")).font(.system(size: 10))
             }.foregroundStyle(.tertiary)
         }
         .padding(20)
@@ -468,21 +483,30 @@ struct TodoView: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let settings = AppSettings.shared
     let store = TaskStore()
     let controller = PanelController()
     var statusItem: NSStatusItem!
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        settings.applyAppearance()
         controller.build(store: store)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "checklist", accessibilityDescription: "ToDo App")
+        settings.onChange = { [weak self] in
+            self?.settings.applyAppearance()
+            self?.rebuildMenu()
+        }
+        rebuildMenu()
+        if store.errorMessage != nil { controller.reveal() }
+    }
+    func rebuildMenu() {
         let menu = NSMenu()
-        for (title, action, key) in [("显示待办", #selector(show), ""), ("隐藏悬浮球", #selector(hide), ""), ("打开本地数据文件夹", #selector(openData), ""), ("退出 ToDo App", #selector(quit), "q")] {
+        for (title, action, key) in [(settings.text("显示待办"), #selector(show), ""), (settings.text("隐藏悬浮球"), #selector(hide), ""), (settings.text("打开本地数据文件夹"), #selector(openData), ""), (settings.text("退出 ToDo App"), #selector(quit), "q")] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
             item.target = self; menu.addItem(item)
         }
         statusItem.menu = menu
-        if store.errorMessage != nil { controller.reveal() }
     }
     @objc func show() { controller.reveal() }
     @objc func hide() { controller.panel.orderOut(nil) }
@@ -490,6 +514,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func quit() { NSApp.terminate(nil) }
 }
 if CommandLine.arguments.contains("--self-test") {
+    let preferencesID = "todo-preferences-test-" + UUID().uuidString
+    let preferences = UserDefaults(suiteName: preferencesID)!
+    let options = AppSettings(defaults: preferences)
+    precondition(options.language == .chinese && options.theme == .system)
+    options.language = .english
+    options.theme = .dark
+    let restored = AppSettings(defaults: preferences)
+    precondition(restored.language == .english && restored.theme == .dark)
+    precondition(restored.text("待办") == "To-do")
+    precondition(restored.locale.identifier == "en_US")
+    let _ = NSApplication.shared
+    restored.applyAppearance()
+    precondition(NSApp.appearance?.name == .darkAqua)
+    restored.theme = .light; restored.applyAppearance()
+    precondition(NSApp.appearance?.name == .aqua)
+    restored.theme = .system; restored.applyAppearance()
+    precondition(NSApp.appearance == nil)
+    preferences.set("unsupported", forKey: "interfaceLanguage")
+    preferences.set("unsupported", forKey: "interfaceTheme")
+    let fallback = AppSettings(defaults: preferences)
+    precondition(fallback.language == .chinese && fallback.theme == .system)
+    preferences.removePersistentDomain(forName: preferencesID)
+    print("PASS: language/theme persistence, translation, locale, appearance overrides, system inheritance, invalid-preference fallback")
     let temp = FileManager.default.temporaryDirectory.appendingPathComponent("todo-tests-" + UUID().uuidString)
     let test = TaskStore(dataDirectory: temp)
     test.add("  测试任务  "); test.add("第二项"); test.add("   ")

@@ -16,7 +16,13 @@ Built with **SwiftUI and AppKit**, with no third-party dependencies.
 - **Local storage:** changes are saved automatically to a JSON file on your Mac.
 - **Menu bar controls:** show or hide the panel, open the data folder, or quit the app.
 
-The current interface is in Chinese and follows the system appearance.
+Switch between **中文** and **English** from the gear button. Choose **System**, **Light**, or **Dark** appearance; both preferences are saved locally and restored on launch. Language changes translate the interface, menus, and dates, without translating your task content. System mode follows macOS appearance changes automatically.
+
+## Design preview
+
+![Chinese light mode, English dark mode, and appearance/language settings](docs/images/appearance-language-demo.png)
+
+*Design mockup used to guide implementation, not a runtime screenshot. Native glass rendering varies with the system and wallpaper.*
 
 ## Requirements
 
@@ -48,7 +54,8 @@ No account, API key, server, or package download is required by the application.
 5. Click the circle beside a task to complete it. Expand the completed section to restore it.
 6. Right-click a task for move and delete actions. Use **Undo** after deletion if needed.
 7. Use the pin button to keep the panel open, or the minus button to collapse it.
-8. Drag the title bar to reposition the panel. The pin and collapse buttons remain independently clickable.
+8. Open the gear button to change language and appearance. Settings are saved automatically.
+9. Drag the title bar to reposition the panel. The pin and collapse buttons remain independently clickable.
 
 The menu bar checklist icon provides show, hide, data-folder, and quit actions. The app does not need to occupy the Dock.
 
@@ -72,7 +79,7 @@ After building, run the isolated storage checks:
 "./ToDo App.app/Contents/MacOS/ToDoApp" --self-test
 ```
 
-These checks use a temporary directory and cover adding, trimming, editing, completion, persistence, deletion/undo, ordering, and protection against overwriting an invalid JSON file. They do not modify your real tasks.
+These checks use a temporary directory and cover adding, trimming, editing, completion, persistence, deletion/undo, ordering, and protection against overwriting an invalid JSON file. They also verify language/theme persistence, locale selection, light/dark overrides, system appearance inheritance, and fallback from invalid preferences. They do not modify your real tasks or saved preferences.
 
 Input, task actions, menu-based ordering, pinning, and expand/collapse have also been checked manually. Animation feel, drag-and-drop ordering, and multi-display behavior still benefit from additional testing.
 
@@ -81,6 +88,8 @@ Input, task actions, menu-based ordering, pinning, and expand/collapse have also
 ```text
 Package.swift                Swift package definition
 Sources/ToDoApp/main.swift    Data model, floating panel, and SwiftUI interface
+Sources/ToDoApp/Settings.swift Language, appearance preferences, and settings UI
+docs/images/                 Design preview assets
 build.sh                     Local .app packaging and signing
 ```
 
